@@ -1,5 +1,4 @@
 import java.nio.file.{FileVisitOption, Files, Path, Paths}
-
 import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.alpakka.file.scaladsl.Directory
@@ -7,13 +6,17 @@ import akka.stream.scaladsl.{FileIO, Flow, Framing, Source}
 import akka.util.ByteString
 import io.circe.parser._
 
+import scala.concurrent.{ExecutionContext, Future}
+
 object LogParser extends App {
   implicit val as: ActorSystem = ActorSystem("log-file-parser")
-
+  final val parallelism = Runtime.getRuntime.availableProcessors() / 2
   val logRootDir = "/Users/deepakkumar/Downloads/logs_back"
   val outputFile = "output.txt"
 
-  def parseLine(line: String): ByteString = {
+  def parseLine(
+    line: String
+  )(implicit ec: ExecutionContext): Future[ByteString] = Future {
     def parseJson: Option[String] = {
       parse(line) match {
         case Left(err) =>
@@ -62,13 +65,13 @@ object LogParser extends App {
     .via(fileFilter)
     .flatMapConcat(FileIO.fromPath(_))
     .via(delimiter)
-    .map(_.utf8String)
-    .map(parseLine)
+    .mapAsync(parallelism)(line => Future.successful(line.utf8String))
+    .mapAsync(parallelism)(line => parseLine(line)(as.dispatcher))
     .runWith(FileIO.toPath(Paths.get(outputFile)))
     .andThen {
       case _ =>
         val endAt = System.currentTimeMillis()
-        println(s"Time taken ${endAt - startedAt} millis")
+        println(s"Time taken: ${endAt - startedAt} millis")
         as.terminate()
     }(as.dispatcher)
 }
